@@ -125,6 +125,23 @@ textarea { width: 100%; box-sizing: border-box; min-height: 170px; font-family: 
 .status { font-size: 14px; }
 .status.err { color: var(--warn); font-weight: 600; }
 .status.ok { color: var(--good); font-weight: 600; }
+.targets { padding: 16px 18px; border-top: 1px solid var(--line); display: grid; gap: 12px; }
+.targets h3 { margin: 0; font-family: var(--f-display); font-weight: 700; font-size: 17px; }
+.best-line { font-size: 15px; }
+.best-line b { font-family: var(--f-data); }
+.tablewrap { overflow-x: auto; }
+table.grades { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+table.grades th, table.grades td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.grades th { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+table.grades td:first-child { font-family: var(--f-display); font-weight: 700; }
+table.grades td.num { font-family: var(--f-data); }
+table.grades tr.no td { color: var(--muted); }
+table.grades tr.best td { background: var(--accent-soft); }
+table.grades tr.done td.num { color: var(--good); font-family: var(--f-body); font-weight: 600; }
+table.grades tr.no td.num { font-family: var(--f-body); }
+.whatif { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 15px; }
+.whatif input { width: 84px; font-family: var(--f-data); }
+.whatif b { font-family: var(--f-data); }
 .credit { text-align: center; font-size: 13px; color: var(--muted); }
 .credit b { color: var(--ink); font-weight: 600; }
 @media (max-width: 420px) { .item { grid-template-columns: 52px 1fr 76px; } }
@@ -303,6 +320,9 @@ textarea { width: 100%; box-sizing: border-box; min-height: 170px; font-family: 
   const DEFAULTS = { lab: 20, asg: 15, mid: 15, pass: 35, course: "EC4010" };
   // Items that do not count equally inside their part (Assignment 1 = 3, Assignment 2 = 12, out of 15).
   const ITEM_WEIGHTS = { Asg1: 3, Asg2: 12 };
+  // Final-mark ranges for each grade (lowest mark for the grade). Below the last one is E.
+  const GRADES = [["A+", 85], ["A", 80], ["A-", 75], ["B+", 70], ["B", 65], ["B-", 60], ["C+", 55], ["C", 50], ["C-", 45], ["D+", 40], ["D", 35]];
+  const gradeFor = m => (GRADES.find(g => m >= g[1]) || ["E"])[0];
   const CSV_KEY = "ec4010-csv";
 
   const $ = id => document.getElementById(id);
@@ -438,8 +458,48 @@ textarea { width: 100%; box-sizing: border-box; min-height: 170px; font-family: 
           <div class="total-sub">${pass ? "Pass" : "Fail"} (pass mark ${fmt(Number(w.pass) || 0)}). In the final grade this counts for <b>${fmt(r.total, 2)}</b> of ${fmt(W)} marks; the end semester exam carries the other ${fmt(100 - W)}.
             ${r.absent || r.blank ? `Absent and missing marks are counted as 0.` : ""}</div>
         </div>
+        ${targetsHTML(rounded, W)}
         ${comps}
       </article>`;
+    const wi = $("whatIf");
+    if (wi) wi.addEventListener("input", () => updateWhatIf(rounded, W));
+  }
+
+  // Final = in-course (rounded, out of 100) × W% + end exam (out of 100) × (100 − W)%
+  const finalMark = (ic, W, exam) => ic * W / 100 + exam * (100 - W) / 100;
+  function targetsHTML(ic, W) {
+    const E = 100 - W;
+    if (E <= 0) return "";
+    const rows = GRADES.map(([g, min]) => {
+      const need = Math.max(0, Math.ceil((min - ic * W / 100) / (E / 100) - 1e-9));
+      return { g, min, need, ok: need <= 100 };
+    });
+    const best = rows.find(r => r.ok);
+    const line = best
+      ? `Best grade you can still get: <b>${best.g}</b>. ${best.need === 0 ? "You already have enough in-course marks for it." : `Score at least <b>${best.need}</b> / 100 in the end exam.`}`
+      : `No grade above E is reachable with this in-course mark.`;
+    return `
+      <section class="targets">
+        <div class="comp-head"><h3>Grade targets</h3>
+          <div class="calc">Final = in-course <b>${ic}</b> × ${fmt(W)}% + end exam × ${fmt(E)}%</div></div>
+        <div class="best-line">${line}</div>
+        <div class="tablewrap"><table class="grades">
+          <thead><tr><th>Grade</th><th>Final mark</th><th>End exam needed</th></tr></thead>
+          <tbody>${rows.map(r => `<tr class="${r === best ? "best" : ""} ${r.ok ? (r.need === 0 ? "done" : "") : "no"}">
+            <td>${r.g}</td><td>${r.min}+</td>
+            <td class="num">${!r.ok ? "Not possible" : r.need === 0 ? "Already secured" : `${r.need} / 100`}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <label class="whatif" for="whatIf">If I score <input type="number" id="whatIf" min="0" max="100" step="1" placeholder="0–100"> in the end exam, my final mark is <b id="wiFinal">–</b> and my grade is <b id="wiGrade">–</b></label>
+        <div class="help">Uses the rounded in-course mark and these grade ranges: A+ 85, A 80, A- 75, B+ 70, B 65, B- 60, C+ 55, C 50, C- 45, D+ 40, D 35, below that E. Check them against your faculty's rules; any minimum end-exam requirement is not included.</div>
+      </section>`;
+  }
+  function updateWhatIf(ic, W) {
+    const v = $("whatIf").value;
+    const n = Number(v);
+    if (v === "" || !isFinite(n) || n < 0 || n > 100) { $("wiFinal").textContent = "–"; $("wiGrade").textContent = "–"; return; }
+    const f = finalMark(ic, W, n);
+    $("wiFinal").textContent = fmt(f, 1);
+    $("wiGrade").textContent = gradeFor(Math.round(f * 100) / 100);
   }
 
   function find(q) {
